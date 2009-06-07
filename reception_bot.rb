@@ -9,6 +9,7 @@ require 'xmpp4r/muc/helper/mucbrowser'
 require 'xmpp4r/muc/helper/simplemucclient'
 require 'xmpp4r/muc/iq/mucowner'
 require 'xmpp4r/debuglog'
+require 'xmpp4r/vcard/helper/vcard'
 include Jabber
 
 Jabber::logger = Logger.new('./log.txt')
@@ -29,6 +30,7 @@ class ReceptionBot
     @client.connect
     @client.auth('12345')
     @browser = Jabber::MUC::MUCBrowser.new(@client)
+    @vcard = Jabber::Vcard::Helper.new(@client)
   end
 
   def messageLoop()
@@ -66,6 +68,22 @@ class ReceptionBot
           when 'exist', 'e'
             exist = roomExists?(args)
             puts exist ? 'yes' : 'no'
+          when 'register'
+            @client.register('12345', {'first' => 'Ivan', 'last' => 'Bot'})
+          when 'geturl'
+            #info, fields = @client.register_info
+            #puts info
+            #puts "fields"
+            #puts fields
+
+            v = @vcard.get
+            puts v['URL']
+          when 'seturl'
+            v = @vcard.get
+            v['URL'] = args
+            @vcard.set v
+            #v = @vcard.get
+            #puts v['URL']
           when 'exit', 'q'
             quit = true
           else
@@ -90,6 +108,11 @@ class ReceptionBot
   end
 
   def destroyRoom
+    if !@muc
+      puts "not in room"
+      return
+    end
+
     begin
       @muc.destroy
       @muc = nil
