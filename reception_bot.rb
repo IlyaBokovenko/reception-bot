@@ -14,10 +14,12 @@ require 'xmpp4r/roster/helper/roster'
 require 'xmpp4r/pubsub/helper/nodebrowser'
 require 'xmpp4r/pubsub/helper/nodehelper'
 require 'xmpp4r/pubsub/iq/pubsub'
+require 'net/http'
+
 include Jabber
 
 Jabber::logger = Logger.new(File.join(File.dirname(__FILE__), 'reception-bot.log'))
-Jabber::debug = true
+Jabber::debug =  true
 
 #NS_SHAREDGROUPS = 'http://jabber.org/protocol/shared-groups'
 #class IqSharedGroups < XMPPElement
@@ -129,9 +131,21 @@ class ReceptionBot
             case command
               when 'list', 'l'
                 sg_list
+              when 'create', 'c'
+                sg_create_group(args)
+                sg_list
+              when 'delete', 'd'
+                sg_delete_group(args)
+                sg_list
               when 'add', 'a'
                 group, user = args.split(/\s+to\s+/)
                 sg_add_user_to_group(user, group)
+            end
+          when 'server', 's'
+            command, args = args.split(' ', 2)
+            case command
+              when 'operators', 'ops', 'o'
+                puts operators
             end
           when 'exit', 'q'
             quit = true
@@ -145,6 +159,18 @@ class ReceptionBot
 
   def host
     @client.jid.domain
+  end
+
+  def login_to_jid(name)
+    name.gsub(/[@.]/, '_')
+  end
+
+
+  def operators
+    xml = Net::HTTP.get(URI.parse('http://sergey.local:3000/operators.xml'))
+    doc = REXML::Document.new(xml)
+    ops = doc.get_elements('operators/operator/email')
+    ops.collect {|each| login_to_jid each.text}
   end
 
   def print_node(name, level)
@@ -168,15 +194,17 @@ class ReceptionBot
   end
 
   def sg_list
-    #iq = Iq.new(:get, SHARED_GROUPS_NODE)
-    #iq.add(IqPubsub.new)
-    #iq.from = @client.jid
-    #iq.first_element('shared-groups').add(REXML::Element.new('groups'))
-    #@client.send_with_id(iq) do |answer|
-    #  p answer
-    #end
     names = @nodebrowser.nodes(SHARED_GROUPS_NODE)
     puts names
+  end
+
+  def sg_create_group(name)
+     Jabber::PubSub::NodeHelper.new(@client, SHARED_GROUPS_NODE, name, true)   
+  end
+
+  def sg_delete_group(name)
+     helper = Jabber::PubSub::NodeHelper.new(@client, SHARED_GROUPS_NODE, name, false)
+     helper.delete_node
   end
 
   def sg_add_user_to_group(user, group)
@@ -376,7 +404,7 @@ class ReceptionBot
   def connect_user_with_operator(user)
     puts "connecting #{user} with free operator"
     room_name = room_name_for_user(user)
-    muc_ensure_room(room_name) { muc_invite(user, room_name) }
+    muc_ensure_room(room_name) { muc_invite(user, room_name); muc_invite(operators.first, room_name) }
 
   end
 
