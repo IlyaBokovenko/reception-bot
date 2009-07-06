@@ -3,6 +3,7 @@
 # This script will send a jabber message to the specified JID. The subject can be
 # specified using the '-s' option, and the message will be taken from stdin.
 
+require 'rubygems'
 require 'optparse'
 require 'xmpp4r'
 require 'xmpp4r/muc/helper/mucbrowser'
@@ -27,6 +28,7 @@ Jabber::debug =  true
 #  force_xmlns true
 #end
 
+WEB_SERVER =  'http://sergey.local:3000'
 HOST = 'ilya.local'
 PUBSUB_NODE = "pubsub.#{HOST}"
 MUC_NODE = "conference.#{HOST}"
@@ -35,8 +37,7 @@ SHARED_GROUPS_NODE = "shared-groups.#{HOST}"
 class ReceptionBot
   def initialize
 
-    @mucs = []
-    @muc = nil
+    @mucs = []    
   end
 
   def connect()    
@@ -61,100 +62,110 @@ class ReceptionBot
 
   end
 
+  def prompt_after(&block)
+    block.call()
+    print "> "
+    $defout.flush
+  end
+
   def run_message_loop()
     quit = false
 
-    while not quit do
-      print "> "
-#      $defout.flush
-      line = gets.strip
-      quit = true if line.nil?
-      if not quit
-        command, args = line.split(' ', 2)
-        args = args.to_s.chomp        
-        case command
-          when 'muc', 'm'
-            command, args = args.split(' ', 2)
-            case command
-              when 'invite', 'i'
-                user, room = args.split(/\s+to\s+/)
-                muc_invite(user, room)
-              when 'exists', 'e'
-                exist = muc_roomExists?(args)
-                puts exist ? 'yes' : 'no'
-              when 'join', 'j'
-                muc_ensure_room(args)
-                muc_list_rooms
-              when 'destroy', 'd'
-                muc_destroy_room(args)
-                muc_list_rooms
-              when 'list', 'l'
-                case args
-                  when 'occupants', 'o'
-                    puts @muc.roster.keys
-                  when 'rooms', 'r'
-                    muc_list_rooms
-                end
-              when 'say', 's'
-                room, msg = args.split(' ', 2)
-                say(msg, room)
-            end
-          when 'roster', 'r'
-            command, args = args.split(' ', 2)
-            case command
-              when 'list', 'l'
-                rost_print
-              when 'add', 'a'
-                rost_subscribe_to(args)
-              when 'remove', 'r'
-                rost_unsubscribe_from(args)
-            end
-          when 'register'
-            @client.register('12345', {'first' => 'Ivan', 'last' => 'Bot'})
-          when 'geturl'
-            v = @vcard.get
-            puts v['URL']
-          when 'seturl'
-            v = @vcard.get
-            v['URL'] = args
-            @vcard.set v
-            #v = @vcard.get
-            #puts v['URL']
-          when 'pubsub', 'ps'
-            command, args = args.split(' ', 2)
-            case command
-              when 'list', 'l'
-                pubsub_list_nodes args
-            end
-          when 'shared-groups', 'sg'
-            command, args = args.split(' ', 2)
-            case command
-              when 'list', 'l'
-                sg_list
-              when 'create', 'c'
-                sg_create_group(args)
-                sg_list
-              when 'delete', 'd'
-                sg_delete_group(args)
-                sg_list
-              when 'add', 'a'
-                group, user = args.split(/\s+to\s+/)
-                sg_add_user_to_group(user, group)
-            end
-          when 'server', 's'
-            command, args = args.split(' ', 2)
-            case command
-              when 'operators', 'ops', 'o'
-                puts operators
-            end
-          when 'exit', 'q'
-            quit = true
-          else
-            puts "Command \"#{command}\" unknown"
+    prompt_after{}
+    
+    while not quit do      
+      prompt_after {
+        line = gets.strip
+        quit = true if line.nil?
+        if not quit
+          command, args = line.split(' ', 2)
+          args = args.to_s.chomp        
+          case command
+            when 'muc', 'm'
+              command, args = args.split(' ', 2)
+              case command
+                when 'invite', 'i'
+                  user, room = args.split(/\s+to\s+/)
+                  muc_invite(user, room)
+                when 'exists', 'e'
+                  exist = muc_roomExists?(args)
+                  puts exist ? 'yes' : 'no'
+                when 'join', 'j'
+                  muc_ensure_room(args)
+                  muc_list_rooms
+                when 'destroy', 'd'
+                  muc_destroy_room(args)
+                  muc_list_rooms
+                when 'list', 'l'
+                  command, args = args.split(' ', 2)
+                  case command
+                    when 'occupants', 'o'
+                      muc = muc_for_room(args)
+                      puts muc.roster.keys  if muc
+                    when 'rooms', 'r'
+                      muc_list_rooms
+                  end
+                when 'say', 's'
+                  room, msg = args.split(' ', 2)
+                  say(msg, room)
+              end
+            when 'roster', 'r'
+              command, args = args.split(' ', 2)
+              case command
+                when 'list', 'l'
+                  rost_print
+                when 'add', 'a'
+                  rost_subscribe_to(args)
+                when 'remove', 'r'
+                  rost_unsubscribe_from(args)
+              end
+            when 'register'
+              @client.register('12345', {'first' => 'Ivan', 'last' => 'Bot'})
+            when 'geturl'
+              v = @vcard.get
+              puts v['URL']
+            when 'seturl'
+              v = @vcard.get
+              v['URL'] = args
+              @vcard.set v
+              #v = @vcard.get
+              #puts v['URL']
+            when 'pubsub', 'ps'
+              command, args = args.split(' ', 2)
+              case command
+                when 'list', 'l'
+                  pubsub_list_nodes args
+              end
+            when 'shared-groups', 'sg'
+              command, args = args.split(' ', 2)
+              case command
+                when 'list', 'l'
+                  sg_list
+                when 'create', 'c'
+                  sg_create_group(args)
+                  sg_list
+                when 'delete', 'd'
+                  sg_delete_group(args)
+                  sg_list
+                when 'add', 'a'
+                  group, user = args.split(/\s+to\s+/)
+                  sg_add_user_to_group(user, group)
+              end
+            when 'server', 's'
+              command, args = args.split(' ', 2)
+              case command
+                when 'operators', 'ops', 'o'
+                  puts operators
+              end
+            when 'exit', 'q'
+              quit = true
+            else
+              puts "Command \"#{command}\" unknown"
+          end
         end
-      end
-    end
-    puts "Shut down"
+      }
+    end        
+    puts "\nShut down"
   end
 
   def host
@@ -167,10 +178,13 @@ class ReceptionBot
 
 
   def operators
-    xml = Net::HTTP.get(URI.parse('http://sergey.local:3000/operators.xml'))
-    doc = REXML::Document.new(xml)
-    ops = doc.get_elements('operators/operator/email')
-    ops.collect {|each| login_to_jid each.text}
+    #xml = Net::HTTP.get(URI.parse("#{WEB_SERVER}/operators.xml"))
+    #doc = REXML::Document.new(xml)
+    #ops = doc.get_elements('operators/operator/email')
+    #ops.collect {|each| login_to_jid each.text}
+    ops = []
+    ops << "operator@ilya.local"
+    ops
   end
 
   def print_node(name, level)
@@ -315,24 +329,24 @@ class ReceptionBot
   def subscribe_to_roster
     # Callback to handle updated roster items
     @roster.add_update_callback do |olditem, item|
-      if !item
-        puts "roster update: old item=#{olditem.jid}, subscription=#{olditem.subscription}"
-      else
-        
-        if [:from, :none].include?(item.subscription) && item.ask != :subscribe
-          puts("Subscribing to #{item.jid}")
-          item.subscribe
-        end
-
-        # Print the item
-        if olditem.nil?
-          # We didn't knew before:
-          puts("received roster item #{item.jid}, subscription=#{item.subscription}")
+        if !item
+          puts "roster update: old item=#{olditem.jid}, subscription=#{olditem.subscription}"
         else
-          # Showing whats different:
-          puts("received roster change #{olditem.iname} (#{olditem.jid}, #{olditem.subscription}) #{olditem.groups.join(', ')} -> #{item.iname} (#{item.jid}, #{item.subscription}) #{item.groups.join(', ')}")
+        
+          if [:from, :none].include?(item.subscription) && item.ask != :subscribe
+            puts("Subscribing to #{item.jid}")
+            item.subscribe
+          end
+
+          # Print the item
+          if olditem.nil?
+            # We didn't knew before:          
+            prompt_after { puts("received roster item #{item.jid}, subscription=#{item.subscription}") }
+          else
+            # Showing whats different:
+            prompt_after { puts("received roster change #{olditem.iname} (#{olditem.jid}, #{olditem.subscription}) #{olditem.groups.join(', ')} -> #{item.iname} (#{item.jid}, #{item.subscription}) #{item.groups.join(', ')}") }
+          end
         end
-      end
     end
 
     # Presence updates:
