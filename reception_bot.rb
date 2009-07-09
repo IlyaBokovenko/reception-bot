@@ -16,11 +16,12 @@ require 'xmpp4r/pubsub/helper/nodebrowser'
 require 'xmpp4r/pubsub/helper/nodehelper'
 require 'xmpp4r/pubsub/iq/pubsub'
 require 'net/http'
+require 'xmpp4r/dataforms'
 
 include Jabber
 
-Jabber::logger = Logger.new(File.join(File.dirname(__FILE__), 'reception-bot.log'))
-Jabber::debug =  true
+logger = Logger.new(File.join(File.dirname(__FILE__), 'reception-bot.log'))
+debug =  true
 
 #NS_SHAREDGROUPS = 'http://jabber.org/protocol/shared-groups'
 #class IqSharedGroups < XMPPElement
@@ -50,14 +51,14 @@ class ReceptionBot
 
     @client.connect
     @client.auth('12345')
-    @browser = Jabber::MUC::MUCBrowser.new(@client)
-    @vcard = Jabber::Vcard::Helper.new(@client)
-    @nodebrowser = Jabber::PubSub::NodeBrowser.new(@client)
+    @browser = MUC::MUCBrowser.new(@client)
+    @vcard = Vcard::Helper.new(@client)
+    @nodebrowser = PubSub::NodeBrowser.new(@client)
 
 
-    @roster = Jabber::Roster::Helper.new(@client)
+    @roster = Roster::Helper.new(@client)
     subscribe_to_roster
-    @client.send(Jabber::Presence.new.set_show(:dnd).set_status('Waiting...beholding...'))
+    @client.send(Presence.new.set_show(:dnd).set_status('Waiting...beholding...'))
 
 
   end
@@ -144,7 +145,13 @@ class ReceptionBot
                 when 'set-config', 'sc'                  
                   node, name, description, display_groups_str = args.split(/;\s*/,4)
                   display_groups = display_groups_str.split(/;\s*/)
-                  sg_group_set_config(node, name, description, display_groups) 
+                  sg_group_set_config(node, name, description, display_groups)
+                when 'add', 'a'
+                  group, user = args.split(' ', 2)
+                  sg_add_user_to_group(user, group) 
+                when 'remove', 'r'
+                  group, user = args.split(' ', 2)
+                  sg_remove_user_from_group(user, group) 
                 when 'list', 'l'
                   sg_list
                 when 'create', 'c'
@@ -219,44 +226,41 @@ class ReceptionBot
   end
 
   def sg_create_group(name)
-     Jabber::PubSub::NodeHelper.new(@client, SHARED_GROUPS_NODE, name, true)   
+     PubSub::NodeHelper.new(@client, SHARED_GROUPS_NODE, name, true)   
   end
 
   def sg_delete_group(name)
-     helper = Jabber::PubSub::NodeHelper.new(@client, SHARED_GROUPS_NODE, name, false)
+     helper = PubSub::NodeHelper.new(@client, SHARED_GROUPS_NODE, name, false)
      helper.delete_node
   end
   
   def sg_group_get_config(name)
-    helper = Jabber::PubSub::ServiceHelper.new(@client, SHARED_GROUPS_NODE)
+    helper = PubSub::ServiceHelper.new(@client, SHARED_GROUPS_NODE)
     print helper.get_config_from(name)
   end
   
   def sg_group_set_config(node, name, description, display_groups)
-    config = Jabber::PubSub::OwnerNodeConfig.new(node)
-    form = Dataform::XData.new(:submit)
+    form = Dataforms::XData.new(:submit)
     form.add(Dataforms::XDataField.new('name')).value = name
     form.add(Dataforms::XDataField.new('description')).value = description
-    form.add(Dataforms::XDataField.new('display_groups')).value = display_groups.join(';')
-    config.form = form    
-    
-    doc = REXML::Document.new()
-    
-    name_tag = REXML::Element.new("name")
-    name_tag.text = name
-    doc.add(name_tag)
-    
-    description_tag = REXML::Element.new("description")
-    description_tag.text = description
-    doc.add(description_tag)
-    
-    groups_tag = REXML::Element.new("displayed_groups")
-    groups_tag.text = displayed_groups.join(";")
-    doc.add(groups_tag)
-    
-    helper = Jabber::PubSub::ServiceHelper.new(@client, SHARED_GROUPS_NODE)
-    
-    helper.set_config_for(node, doc.to_s)
+    form.add(Dataforms::XDataField.new('displayed_groups')).value = display_groups.join(';')
+        
+    helper = PubSub::ServiceHelper.new(@client, SHARED_GROUPS_NODE)    
+    helper.set_config_for(node, form)
+  end
+  
+  def sg_add_user_to_group(user, group)
+    helper = PubSub::ServiceHelper.new(@client, SHARED_GROUPS_NODE)
+    user_item = PubSub::Item.new
+    user_item.text = user    
+    helper.publish_item_to(group, user_item)
+  end
+
+  def sg_remove_user_from_group(user, group)
+    helper = PubSub::ServiceHelper.new(@client, SHARED_GROUPS_NODE)
+    user_item = PubSub::Item.new
+    user_item.text = user    
+    helper.delete_item_from(group, user_item)
   end
   
   ## set group's properties
@@ -265,13 +269,9 @@ class ReceptionBot
   # => description:: [String]
   # => displayed_groups:: [Array of String]
   def sg_configure_group(name, options)
-    helper = Jabber::PubSub::NodeHelper.new(@client, SHARED_GROUPS_NODE, name, false)
-    config = Jabber::PubSub::NodeConfig(name, options)
+    helper = PubSub::NodeHelper.new(@client, SHARED_GROUPS_NODE, name, false)
+    config = PubSub::NodeConfig(name, options)
     helper.set_config_for(name, config) 
-  end
-
-  def sg_add_user_to_group(user, group)
-    puts "Not implemented yet"
   end
 
   def say(text, room_name)
@@ -299,7 +299,7 @@ class ReceptionBot
       return
     end
 
-    muc = Jabber::MUC::SimpleMUCClient.new(@client)
+    muc = MUC::SimpleMUCClient.new(@client)
     muc.add_self_join_callback() do |pres|
       muc.configure(
             'muc#roomconfig_roomname' => room_name + ' Room',
@@ -324,7 +324,7 @@ class ReceptionBot
     begin
       muc.destroy
       @mucs.delete muc
-    rescue Jabber::ServerError, RuntimeError
+    rescue ServerError, RuntimeError
       p $!.to_s
     end
   end
@@ -344,17 +344,17 @@ class ReceptionBot
 
 
   def muc_roomExists?(room)
-    room_jid  = Jabber::JID.new(room)
+    room_jid  = JID.new(room)
     muc_rooms().include?(room_jid)
   end
 
   def rost_subscribe_to(user_name)
-    user_jid = Jabber::JID.new(user_name)
+    user_jid = JID.new(user_name)
     @roster.add(user_jid)
   end
 
   def rost_unsubscribe_from(user_name)
-    user_jid = Jabber::JID.new(user_name)
+    user_jid = JID.new(user_name)
     @roster.remove(user_jid)
   end
 
@@ -403,11 +403,11 @@ class ReceptionBot
       prompt_after {
         if pres.nil?
           # ...so create it:
-          pres = Jabber::Presence.new
+          pres = Presence.new
         end
         if oldpres.nil?
           # ...so create it:
-          oldpres = Jabber::Presence.new
+          oldpres = Presence.new
         end
 
         # Print name and jid:
