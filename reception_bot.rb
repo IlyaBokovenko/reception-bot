@@ -139,6 +139,12 @@ class ReceptionBot
             when 'shared-groups', 'sg'
               command, args = args.split(' ', 2)
               case command
+                when 'get-config', 'gc'
+                  sg_group_get_config(args) 
+                when 'set-config', 'sc'                  
+                  node, name, description, display_groups_str = args.split(/;\s*/,4)
+                  display_groups = display_groups_str.split(/;\s*/)
+                  sg_group_set_config(node, name, description, display_groups) 
                 when 'list', 'l'
                   sg_list
                 when 'create', 'c'
@@ -219,6 +225,49 @@ class ReceptionBot
   def sg_delete_group(name)
      helper = Jabber::PubSub::NodeHelper.new(@client, SHARED_GROUPS_NODE, name, false)
      helper.delete_node
+  end
+  
+  def sg_group_get_config(name)
+    helper = Jabber::PubSub::ServiceHelper.new(@client, SHARED_GROUPS_NODE)
+    print helper.get_config_from(name)
+  end
+  
+  def sg_group_set_config(node, name, description, display_groups)
+    config = Jabber::PubSub::OwnerNodeConfig.new(node)
+    form = Dataform::XData.new(:submit)
+    form.add(Dataforms::XDataField.new('name')).value = name
+    form.add(Dataforms::XDataField.new('description')).value = description
+    form.add(Dataforms::XDataField.new('display_groups')).value = display_groups.join(';')
+    config.form = form    
+    
+    doc = REXML::Document.new()
+    
+    name_tag = REXML::Element.new("name")
+    name_tag.text = name
+    doc.add(name_tag)
+    
+    description_tag = REXML::Element.new("description")
+    description_tag.text = description
+    doc.add(description_tag)
+    
+    groups_tag = REXML::Element.new("displayed_groups")
+    groups_tag.text = displayed_groups.join(";")
+    doc.add(groups_tag)
+    
+    helper = Jabber::PubSub::ServiceHelper.new(@client, SHARED_GROUPS_NODE)
+    
+    helper.set_config_for(node, doc.to_s)
+  end
+  
+  ## set group's properties
+  #  options:: [Hash] with possible keys: 
+  # => name:: [String]
+  # => description:: [String]
+  # => displayed_groups:: [Array of String]
+  def sg_configure_group(name, options)
+    helper = Jabber::PubSub::NodeHelper.new(@client, SHARED_GROUPS_NODE, name, false)
+    config = Jabber::PubSub::NodeConfig(name, options)
+    helper.set_config_for(name, config) 
   end
 
   def sg_add_user_to_group(user, group)
@@ -351,53 +400,57 @@ class ReceptionBot
 
     # Presence updates:
     @roster.add_presence_callback do |item, oldpres, pres|
-      if pres.nil?
-        # ...so create it:
-        pres = Jabber::Presence.new
-      end
-      if oldpres.nil?
-        # ...so create it:
-        oldpres = Jabber::Presence.new
-      end
+      prompt_after {
+        if pres.nil?
+          # ...so create it:
+          pres = Jabber::Presence.new
+        end
+        if oldpres.nil?
+          # ...so create it:
+          oldpres = Jabber::Presence.new
+        end
 
-      # Print name and jid:
-      name = "#{pres.from}"
-      if item.iname
-        name = "#{item.iname} (#{pres.from})"
-      end
-      puts("changed presence of #{name}")
+        # Print name and jid:
+        name = "#{pres.from}"
+        if item.iname
+          name = "#{item.iname} (#{pres.from})"
+        end
+        puts("changed presence of #{name}")
 
-      # Print type changes:
-      unless oldpres.type.nil? && pres.type.nil?
-        puts("  type: #{oldpres.type.inspect} -> #{pres.type.inspect}")
-      end
-      # Print show changes:
-      unless oldpres.show.nil? && pres.show.nil?
-        puts("  show:     #{oldpres.show.to_s.inspect} -> #{pres.show.to_s.inspect}")
-      end
-      # Print status changes:
-      unless oldpres.status.nil? && pres.status.nil?
-        puts("  status:   #{oldpres.status.to_s.inspect} -> #{pres.status.to_s.inspect}")
-      end
-      # Print priority changes:
-      unless oldpres.priority.nil? && pres.priority.nil?
-        puts("  priority: #{oldpres.priority.inspect} -> #{pres.priority.inspect}")
-      end
+        # Print type changes:
+        unless oldpres.type.nil? && pres.type.nil?
+          puts("  type: #{oldpres.type.inspect} -> #{pres.type.inspect}")
+        end
+        # Print show changes:
+        unless oldpres.show.nil? && pres.show.nil?
+          puts("  show:     #{oldpres.show.to_s.inspect} -> #{pres.show.to_s.inspect}")
+        end
+        # Print status changes:
+        unless oldpres.status.nil? && pres.status.nil?
+          puts("  status:   #{oldpres.status.to_s.inspect} -> #{pres.status.to_s.inspect}")
+        end
+        # Print priority changes:
+        unless oldpres.priority.nil? && pres.priority.nil?
+          puts("  priority: #{oldpres.priority.inspect} -> #{pres.priority.inspect}")
+        end
+      }
     end
 
     # Subscription requests and responses:
     subscription_callback = lambda { |item,pres|
-      name = pres.from
-      if item != nil && item.iname != nil
-        name = "#{item.iname} (#{pres.from})"
-      end
-      case pres.type
-        when :subscribe then puts("subscription request from #{name}")
-        when :subscribed then puts("subscribed to #{name}")
-        when :unsubscribe then puts("unsubscription request from #{name}")
-        when :unsubscribed then puts("unsubscribed from #{name}")
-        else raise "The @roster Helper is buggy!!! subscription callback with type=#{pres.type}"
-      end
+      prompt_after {
+        name = pres.from
+        if item != nil && item.iname != nil
+          name = "#{item.iname} (#{pres.from})"
+        end
+        case pres.type
+          when :subscribe then puts("subscription request from #{name}")
+          when :subscribed then puts("subscribed to #{name}")
+          when :unsubscribe then puts("unsubscription request from #{name}")
+          when :unsubscribed then puts("unsubscribed from #{name}")
+          else raise "The @roster Helper is buggy!!! subscription callback with type=#{pres.type}"
+        end
+      }
     }
     @roster.add_subscription_callback(0, nil, &subscription_callback)
     @roster.add_subscription_request_callback(0, nil, &subscription_callback)
