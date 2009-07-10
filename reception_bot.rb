@@ -30,10 +30,14 @@ debug =  true
 #end
 
 WEB_SERVER =  'http://sergey.local:3000'
+WEB_LOGIN, WEB_PASS = "admin@example.com", "qweqwe"
+
 HOST = 'ilya.local'
+JABBER_LOGIN = 'reception-bot'
 PUBSUB_NODE = "pubsub.#{HOST}"
 MUC_NODE = "conference.#{HOST}"
 SHARED_GROUPS_NODE = "shared-groups.#{HOST}"
+
 
 class ReceptionBot
   def initialize
@@ -42,7 +46,7 @@ class ReceptionBot
   end
 
   def connect()    
-    @client = Client.new("reception-bot@#{HOST}")
+    @client = Client.new(JABBER_LOGIN + '@' + HOST)
     @client.add_message_callback do |m|
       if m.type != :error
         connect_user_with_operator(m.from)        
@@ -51,6 +55,9 @@ class ReceptionBot
 
     @client.connect
     @client.auth('12345')
+    
+    sg_restore_groups
+    
     @browser = MUC::MUCBrowser.new(@client)
     @vcard = Vcard::Helper.new(@client)
     @nodebrowser = PubSub::NodeBrowser.new(@client)
@@ -163,6 +170,8 @@ class ReceptionBot
                 when 'add', 'a'
                   group, user = args.split(/\s+to\s+/)
                   sg_add_user_to_group(user, group)
+                when 'restore'
+                  sg_restore_groups
               end
             when 'server', 's'
               command, args = args.split(' ', 2)
@@ -185,19 +194,29 @@ class ReceptionBot
     @client.jid.domain
   end
 
-  def login_to_jid(name)
-    name.gsub(/[@.]/, '_')
+  def login_to_jid(name)        
+    substs = [['_',''], ['@', 'at'], ['.', 'dot']]
+    res = name
+    substs.each {|key, val| res = res.gsub(key, '_' + val + '_')}
+    res
   end
 
 
-  def operators
-    #xml = Net::HTTP.get(URI.parse("#{WEB_SERVER}/operators.xml"))
-    #doc = REXML::Document.new(xml)
-    #ops = doc.get_elements('operators/operator/email')
-    #ops.collect {|each| login_to_jid each.text}
-    ops = []
-    ops << "operator@ilya.local"
-    ops
+  def operators    
+    # uri = URI.parse("#{WEB_SERVER}/operators.xml")
+    # xml = nil
+    # Net::HTTP.start(uri.host,uri.port) do |http|
+    #   req = Net::HTTP::Get.new(uri.path)
+    #   req.basic_auth WEB_LOGIN, WEB_PASS
+    #   res = http.request(req)
+    #   xml = res.body
+    # end   
+    # 
+    # doc = REXML::Document.new(xml)
+    # ops = doc.get_elements('operators/operator/email')
+    # ops.collect {|each| login_to_jid each.text}        
+    
+    ["operator1", "operator2"]
   end
 
   def print_node(name, level)
@@ -219,6 +238,15 @@ class ReceptionBot
     end
 
   end
+  
+  def sg_restore_groups()
+    group = "users"
+    sg_delete_group group
+    sg_create_group group
+    sg_group_set_config(group, "all users", "All users should see each other", [group])
+    users = ([JABBER_LOGIN] + operators).collect {|each| each + "@" + HOST}
+    users.each {|each| sg_add_user_to_group(each, group)}
+  end
 
   def sg_list
     names = @nodebrowser.nodes(SHARED_GROUPS_NODE)
@@ -239,14 +267,14 @@ class ReceptionBot
     print helper.get_config_from(name)
   end
   
-  def sg_group_set_config(node, name, description, display_groups)
+  def sg_group_set_config(group, name, description, display_groups)
     form = Dataforms::XData.new(:submit)
     form.add(Dataforms::XDataField.new('name')).value = name
     form.add(Dataforms::XDataField.new('description')).value = description
     form.add(Dataforms::XDataField.new('displayed_groups')).value = display_groups.join(';')
         
     helper = PubSub::ServiceHelper.new(@client, SHARED_GROUPS_NODE)    
-    helper.set_config_for(node, form)
+    helper.set_config_for(group, form)
   end
   
   def sg_add_user_to_group(user, group)
@@ -263,17 +291,6 @@ class ReceptionBot
     helper.delete_item_from(group, user_item)
   end
   
-  ## set group's properties
-  #  options:: [Hash] with possible keys: 
-  # => name:: [String]
-  # => description:: [String]
-  # => displayed_groups:: [Array of String]
-  def sg_configure_group(name, options)
-    helper = PubSub::NodeHelper.new(@client, SHARED_GROUPS_NODE, name, false)
-    config = PubSub::NodeConfig(name, options)
-    helper.set_config_for(name, config) 
-  end
-
   def say(text, room_name)
     if not muc = muc_for_room(room_name)
       puts "not in room #{room_name}"
