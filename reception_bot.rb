@@ -23,51 +23,62 @@ include Jabber
 logger = Logger.new(File.join(File.dirname(__FILE__), 'reception-bot.log'))
 debug =  true
 
-#NS_SHAREDGROUPS = 'http://jabber.org/protocol/shared-groups'
-#class IqSharedGroups < XMPPElement
-#  name_xmlns 'shared-groups', NS_SHAREDGROUPS
-#  force_xmlns true
-#end
-
 WEB_SERVER =  'http://sergey.local:3000'
 WEB_LOGIN, WEB_PASS = "admin@example.com", "qweqwe"
 
-HOST = 'ilya.local'
-JABBER_LOGIN = 'reception-bot'
-PUBSUB_NODE = "pubsub.#{HOST}"
-MUC_NODE = "conference.#{HOST}"
-SHARED_GROUPS_NODE = "shared-groups.#{HOST}"
+JABBER_SERVER = 'ilya.local'
+JABBER_LOGIN = "reception-bot@#{JABBER_SERVER}"
+PUBSUB_NODE = "pubsub.#{JABBER_SERVER}"
+MUC_NODE = "conference.#{JABBER_SERVER}"
+SHARED_GROUPS_NODE = "shared-groups.#{JABBER_SERVER}"
 
+class Presence
+  def xjid
+    x.items[0].jid
+  end
+end
+
+class MUC::MUCClient
+  def xjids
+    roster.values.collect {|pres| pres.xjid}
+  end  
+  
+  def bare_xjids
+    xjids.collect {|each| each.bare}
+  end
+end
 
 class ReceptionBot
   def initialize
-
-    @mucs = []    
+    @mucs = []   
+    @users_queue = [] 
+  end
+  
+  def blabla
   end
 
   def connect()    
-    @client = Client.new(JABBER_LOGIN + '@' + HOST)
+    @client = Client.new(JABBER_LOGIN)
     @client.add_message_callback do |m|
-      if m.type != :error
-        connect_user_with_operator(m.from)        
+      if m.type != :error        
+        connect_user_with_operator(m.from)      
       end
+      true
     end
 
     @client.connect
     @client.auth('12345')
-    
-    sg_restore_groups
-    
+        
     @browser = MUC::MUCBrowser.new(@client)
     @vcard = Vcard::Helper.new(@client)
     @nodebrowser = PubSub::NodeBrowser.new(@client)
-
 
     @roster = Roster::Helper.new(@client)
     subscribe_to_roster
     @client.send(Presence.new.set_show(:dnd).set_status('Waiting...beholding...'))
 
-
+    sg_restore_groups
+    # join_all_rooms
   end
 
   def prompt_after(&block)
@@ -177,8 +188,12 @@ class ReceptionBot
               command, args = args.split(' ', 2)
               case command
                 when 'operators', 'ops', 'o'
-                  puts operators
-              end
+                  puts operators.collect {|each|
+                    online = @roster[each].online? ? "online" : ""
+                    busy = operator_busy?(each) ? "busy" : ""
+                    "#{each} #{online} #{busy}" 
+                  }
+                end
             when 'exit', 'q'
               quit = true
             else
@@ -214,9 +229,29 @@ class ReceptionBot
     # 
     # doc = REXML::Document.new(xml)
     # ops = doc.get_elements('operators/operator/email')
-    # ops.collect {|each| login_to_jid each.text}        
+    # res = ops.collect {|each| login_to_jid each.text}        
+    res = ["operator1", "operator2"]
     
-    ["operator1", "operator2"]
+    res.collect {|each| each + "@" + JABBER_SERVER}        
+  end
+  
+  def customers
+    res = ["user"]
+    res.collect {|each| each + "@" + JABBER_SERVER}
+  end
+  
+  def operator_busy?(op)
+    op_jid = JID.new(op)
+    @mucs.each { |muc|
+      jids = muc.xjids
+      roles = jids.collect {|jid| classify_jid(jid)}
+      has_customer = roles.include? :customer      
+      jids.each {|jid|        
+          return has_customer if jid.bare == op_jid 
+      }      
+    }
+    
+    return false    
   end
 
   def print_node(name, level)
@@ -244,7 +279,7 @@ class ReceptionBot
     sg_delete_group group
     sg_create_group group
     sg_group_set_config(group, "all users", "All users should see each other", [group])
-    users = ([JABBER_LOGIN] + operators).collect {|each| each + "@" + HOST}
+    users = ([JABBER_LOGIN] + operators)
     users.each {|each| sg_add_user_to_group(each, group)}
   end
 
@@ -316,7 +351,7 @@ class ReceptionBot
       return
     end
 
-    muc = MUC::SimpleMUCClient.new(@client)
+    muc = MUC::SimpleMUCClient.new(@client)    
     muc.add_self_join_callback() do |pres|
       muc.configure(
             'muc#roomconfig_roomname' => room_name + ' Room',
@@ -325,7 +360,11 @@ class ReceptionBot
             'muc#roomconfig_changesubject' => 0,
             'allow_private_messages' => 0)
       block.call() if block
+      true
     end
+    muc.add_join_callback  {|presence| process_join(muc, presence); true}
+    muc.add_leave_callback {|presence| process_leave(muc, presence); true}
+    
     @mucs << muc
 
     puts "joining room '#{room_name}'"
@@ -391,6 +430,41 @@ class ReceptionBot
     end
 
   end
+  
+  def print_presence_change(item, oldpres, pres)
+    if pres.nil?
+       # ...so create it:
+       pres = Presence.new
+     end
+     if oldpres.nil?
+       # ...so create it:
+       oldpres = Presence.new
+     end
+
+     # Print name and jid:
+     name = "#{pres.from}"
+     if item.iname
+       name = "#{item.iname} (#{pres.from})"
+     end
+     puts("changed presence of #{name}")
+
+     # Print type changes:
+     unless oldpres.type.nil? && pres.type.nil?
+       puts("  type: #{oldpres.type.inspect} -> #{pres.type.inspect}")
+     end
+     # Print show changes:
+     unless oldpres.show.nil? && pres.show.nil?
+       puts("  show:     #{oldpres.show.to_s.inspect} -> #{pres.show.to_s.inspect}")
+     end
+     # Print status changes:
+     unless oldpres.status.nil? && pres.status.nil?
+       puts("  status:   #{oldpres.status.to_s.inspect} -> #{pres.status.to_s.inspect}")
+     end
+     # Print priority changes:
+     unless oldpres.priority.nil? && pres.priority.nil?
+       puts("  priority: #{oldpres.priority.inspect} -> #{pres.priority.inspect}")
+     end
+  end
 
   def subscribe_to_roster
     # Callback to handle updated roster items
@@ -413,44 +487,21 @@ class ReceptionBot
             prompt_after { puts("received roster change #{olditem.iname} (#{olditem.jid}, #{olditem.subscription}) #{olditem.groups.join(', ')} -> #{item.iname} (#{item.jid}, #{item.subscription}) #{item.groups.join(', ')}") }
           end
         end
-    end
+        true
+    end    
 
     # Presence updates:
     @roster.add_presence_callback do |item, oldpres, pres|
       prompt_after {
-        if pres.nil?
-          # ...so create it:
-          pres = Presence.new
-        end
-        if oldpres.nil?
-          # ...so create it:
-          oldpres = Presence.new
-        end
-
-        # Print name and jid:
-        name = "#{pres.from}"
-        if item.iname
-          name = "#{item.iname} (#{pres.from})"
-        end
-        puts("changed presence of #{name}")
-
-        # Print type changes:
-        unless oldpres.type.nil? && pres.type.nil?
-          puts("  type: #{oldpres.type.inspect} -> #{pres.type.inspect}")
-        end
-        # Print show changes:
-        unless oldpres.show.nil? && pres.show.nil?
-          puts("  show:     #{oldpres.show.to_s.inspect} -> #{pres.show.to_s.inspect}")
-        end
-        # Print status changes:
-        unless oldpres.status.nil? && pres.status.nil?
-          puts("  status:   #{oldpres.status.to_s.inspect} -> #{pres.status.to_s.inspect}")
-        end
-        # Print priority changes:
-        unless oldpres.priority.nil? && pres.priority.nil?
-          puts("  priority: #{oldpres.priority.inspect} -> #{pres.priority.inspect}")
-        end
+ 
+        print_presence_change(item, oldpres, pres)
+        
+        if pres and pres.type.nil? and classify_jid(pres.from) == :operator
+          puts "operator #{pres.from} is online"
+          on_operators_freed [pres.from]
+        end        
       }
+      true
     end
 
     # Subscription requests and responses:
@@ -468,6 +519,7 @@ class ReceptionBot
           else raise "The @roster Helper is buggy!!! subscription callback with type=#{pres.type}"
         end
       }
+      true
     }
     @roster.add_subscription_callback(0, nil, &subscription_callback)
     @roster.add_subscription_request_callback(0, nil, &subscription_callback)
@@ -484,16 +536,74 @@ class ReceptionBot
   def room_name_for_user(user)
     user.node.gsub(/[@.]/, '_') + '_room'
   end
-
-  def connect_user_with_operator(user)
-    puts "connecting #{user} with free operator"
-    room_name = room_name_for_user(user)
-    muc_ensure_room(room_name) { muc_invite(user, room_name); muc_invite(operators.first, room_name) }
-
+  
+  def find_free_operator_for_user(user)
+    operators.detect {|each| @roster[each].online? and not operator_busy?(each)}
+  end
+  
+  def connect_user_with_operator(user)    
+    free_op = find_free_operator_for_user(user)
+    if free_op
+      puts "connecting #{user} with operator #{free_op}"
+      room_name = room_name_for_user(user)
+      muc_ensure_room(room_name) { 
+        muc_invite(user, room_name)
+        muc_invite(free_op, room_name) 
+      }
+    else      
+      puts "no free operator found. Putting #{user} to waiting queue"              
+      (@users_queue << user).uniq!
+    end    
+  end
+  
+  def classify_jid(jid)
+    jid_str = jid.bare.to_s
+    return :customer if customers.include? jid_str
+    return :operator if operators.include? jid_str
+    return :bot if jid_str == JABBER_LOGIN 
+    return :unknown
+  end
+  
+  def process_join(muc, pres)
+    prompt_after {
+      user_role = classify_jid(pres.xjid)
+      puts "user #{pres.from.resource} (#{user_role}) has joined #{muc.room}"
+    }
   end
 
+  def process_leave(muc, pres)
+    prompt_after {    
+      user_role = classify_jid(pres.xjid)    
+      puts "user #{pres.from.resource} (#{user_role}) has left #{muc.room}"        
+      jids_left = {}
+      muc.bare_xjids.each {|jid| jids_left[jid] = classify_jid(jid)}
+      case user_role      
+        when :customer
+          if jids_left.values.include? :operator
+            freed_ops = (jids_left.select {|jid, role| role == :operator}).collect {|jid_and_role| jid_and_role[0] }
+            puts("customer left -> release room operator #{freed_ops}")
+            on_operators_freed freed_ops
+          end      
+        when :operator
+          if jids_left.values.include? :customer          
+            user = jids_left.invert[:customer]
+            puts("operator left -> find free operator for room customer #{user}")
+            connect_user_with_operator(user)
+          end        
+      end
+    }  
+  end
+  
+  def on_operators_freed(freed_ops)
+    user = @users_queue.shift
+    if user
+      puts "there is a user #{user} waiting for processing"
+      connect_user_with_operator(user)
+    end   
+  end
 
 end
+
 
 bot = ReceptionBot.new
 bot.connect()
