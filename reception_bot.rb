@@ -20,8 +20,8 @@ require 'xmpp4r/dataforms'
 
 include Jabber
 
-logger = Logger.new(File.join(File.dirname(__FILE__), 'reception-bot.log'))
-debug =  true
+Jabber::logger = Logger.new(File.join(File.dirname(__FILE__), 'reception-bot.log'))
+Jabber::debug =  true
 
 WEB_SERVER =  'http://sergey.local:3000'
 WEB_LOGIN, WEB_PASS = "admin@example.com", "qweqwe"
@@ -64,6 +64,10 @@ class ReceptionBot
       true
     end
     
+    @client.add_presence_callback do |pres|
+      puts "presence received: #{pres}"
+    end
+    
     @client.connect
     @client.auth('12345')
     
@@ -73,7 +77,7 @@ class ReceptionBot
     
     @roster = Roster::Helper.new(@client)
     subscribe_to_roster
-    @client.send(Presence.new.set_show(:dnd).set_status('Waiting...beholding...'))
+    @client.send(Presence.new.set_show(:chat).set_status('Waiting...beholding...'))
     
     sg_restore_groups
     # join_all_rooms
@@ -157,30 +161,34 @@ class ReceptionBot
             command, args = args.split(' ', 2)
             case command
               when 'get-config', 'gc'
-              sg_group_get_config(args) 
+                sg_group_get_config(args) 
               when 'set-config', 'sc'                  
-              node, name, description, display_groups_str = args.split(/;\s*/,4)
-              display_groups = display_groups_str.split(/;\s*/)
-              sg_group_set_config(node, name, description, display_groups)
+                node, name, description, display_groups_str = args.split(/;\s*/,4)
+                display_groups = display_groups_str.split(/;\s*/)
+                sg_group_set_config(node, name, description, display_groups)
               when 'add', 'a'
-              group, user = args.split(' ', 2)
-              sg_add_user_to_group(user, group) 
+                group, user = args.split(' ', 2)
+                sg_add_user_to_group(user, group) 
               when 'remove', 'r'
-              group, user = args.split(' ', 2)
-              sg_remove_user_from_group(user, group) 
+                group, user = args.split(' ', 2)
+                sg_remove_user_from_group(user, group) 
               when 'list', 'l'
-              sg_list
+                if args.strip.empty?
+                 puts sg_list_groups
+               else
+                 puts sg_list_group_users(args.strip)
+               end                
               when 'create', 'c'
-              sg_create_group(args)
-              sg_list
+                sg_create_group(args)
+                puts sg_list_groups
               when 'delete', 'd'
-              sg_delete_group(args)
-              sg_list
+                sg_delete_group(args)
+                puts sg_list_groups
               when 'add', 'a'
-              group, user = args.split(/\s+to\s+/)
-              sg_add_user_to_group(user, group)
+                group, user = args.split(/\s+to\s+/)
+                sg_add_user_to_group(user, group)
               when 'restore'
-              sg_restore_groups
+                sg_restore_groups
             end
             when 'server', 's'
             command, args = args.split(' ', 2)
@@ -272,18 +280,29 @@ class ReceptionBot
     
   end
   
-  def sg_restore_groups()
-    group = "users"
-    sg_delete_group group
-    sg_create_group group
-    sg_group_set_config(group, "all users", "All users should see each other", [group])
-    users = ([JABBER_LOGIN] + operators)
-    users.each {|each| sg_add_user_to_group(each, group)}
+  def sg_restore_groups()     
+    all = "users"
+    
+    unless sg_list_groups.include? all
+      sg_create_group all
+      sg_group_set_config(all, "all users", "All users should see each other", [all])
+    end        
+    
+    jabber_users = sg_list_group_users(all)
+    webserver_users = ([JABBER_LOGIN] + operators)
+    users_to_create = webserver_users - jabber_users
+    users_to_delete = jabber_users - webserver_users 
+    users_to_delete.each {|each| sg_remove_user_from_group(each, all)}
+    users_to_create.each {|each| sg_add_user_to_group(each, all)}
   end
   
-  def sg_list
-    names = @nodebrowser.nodes(SHARED_GROUPS_NODE)
-    puts names
+  def sg_list_groups
+    @nodebrowser.nodes(SHARED_GROUPS_NODE)    
+  end
+  
+  def sg_list_group_users(group)
+    users = @nodebrowser.items(SHARED_GROUPS_NODE, group)    
+    users.collect {|each| each["jid"].bare.to_s}
   end
   
   def sg_create_group(name)
